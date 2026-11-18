@@ -1,0 +1,6 @@
+# Los datos de tu proyecto. Llena todo; el check del PR lo revisa.
+estado = "entrega"   # "propuesta" en el primer PR; "entrega" en el segundo
+titulo = "Prueba del check"
+tema = "Prueba de punta a punta del check"
+equipo = ["uumami"]   # logins de GitHub; si vas solo, uno
+demo = "https://rayalucaria.org/ia_o26/"              # URL de la demo; vacío en la propuesta

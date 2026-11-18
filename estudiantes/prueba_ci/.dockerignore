@@ -1,0 +1,5 @@
+.env
+datos/
+modelos/
+.git
+__pycache__/

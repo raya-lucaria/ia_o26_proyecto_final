@@ -1,0 +1,10 @@
+# Lo pesado se queda en tu computadora. El README dice cómo conseguirlo.
+datos/
+modelos/
+
+# Secretos: nunca se suben. Sube un .env.example sin valores.
+.env
+.env.*
+!.env.example
+
+# Agrega aquí lo tuyo (resultados, cachés, etc.)
