@@ -1,0 +1,368 @@
+import Phaser from 'phaser';
+import { getRaycastDifficultyPreset, RAYCAST_DIFFICULTY_REGISTRY_KEY, type RaycastDifficultyId } from '../raycast/RaycastDifficulty';
+import { getPrologueCopy } from '../raycast/RaycastPresentation';
+import { buildPrologueModifierBlock, computePrologueScreenLayout } from '../raycast/RaycastPrologueLayout';
+import { RAYCAST_CSS, RAYCAST_PALETTE } from '../raycast/RaycastPalette';
+import {
+  getRunModifierById,
+  rollRunModifier,
+  RUN_MODIFIER_ROULETTE,
+  type RunModifierId
+} from '../raycast/RunModifierRoulette';
+import { createEmptyCampaignMetrics } from '../raycast/RaycastScore';
+import { prepareGameSession } from '../save/persistSessionSettings';
+import {
+  getGamepadInvertY,
+  getGamepadLeftDeadzone,
+  getGamepadRightDeadzone,
+  getGamepadSensitivity,
+  getGamepadVibrationEnabled,
+  getTouchButtonScale,
+  getTouchControlsEnabled,
+  getTouchJoystickDeadzone,
+  getTouchLookSensitivity
+} from '../sessionSettings';
+import { getRaycastBossLevelId, type RaycastBossShortcutSlot } from '../raycast/RaycastBossShortcuts';
+import { buildRaycastGamepadFooterLine } from '../raycast/RaycastInputHelp';
+import { RaycastGamepadInput } from '../systems/RaycastGamepadInput';
+import { RaycastTouchInput } from '../systems/RaycastTouchInput';
+import { stopGameMasterVoice } from '../../services/gameMasterVoice';
+
+const BG = RAYCAST_PALETTE.voidBlack;
+const BODY_COLOR = RAYCAST_CSS.bodyText;
+const MUTED_COLOR = RAYCAST_CSS.mutedText;
+const ACCENT_COLOR = RAYCAST_CSS.accentText;
+
+export interface PrologueSceneData {
+  difficultyId?: RaycastDifficultyId;
+  runModifierId?: RunModifierId | null;
+}
+
+export class PrologueScene extends Phaser.Scene {
+  private difficultyId!: RaycastDifficultyId;
+  private runModifierId: RunModifierId | null = null;
+  private modifierText!: Phaser.GameObjects.Text;
+  private promptText!: Phaser.GameObjects.Text;
+  private gamepadStatusText!: Phaser.GameObjects.Text;
+  private gamepadInput!: RaycastGamepadInput;
+  private touchInput!: RaycastTouchInput;
+  private inputListenersRegistered = false;
+
+  private readonly handleContinueRaycast = (): void => {
+    stopGameMasterVoice('prologue_start_run');
+    this.cleanupInputListeners();
+    this.scene.start('RaycastScene', { difficultyId: this.difficultyId, runModifierId: this.runModifierId });
+  };
+
+  private readonly handleBackToMenu = (): void => {
+    stopGameMasterVoice('prologue_exit_menu');
+    this.cleanupInputListeners();
+    this.scene.start('MenuScene');
+  };
+
+  private jumpToBossFromPrologue(slot: RaycastBossShortcutSlot): void {
+    this.cleanupInputListeners();
+    this.scene.start('RaycastScene', {
+      levelId: getRaycastBossLevelId(slot),
+      difficultyId: this.difficultyId,
+      carryScore: 0,
+      carryCampaignMetrics: createEmptyCampaignMetrics(),
+      rewardTier: 0,
+      runModifierId: this.runModifierId
+    });
+  };
+
+  private readonly handlePrologueBossOne = (): void => {
+    this.jumpToBossFromPrologue(1);
+  };
+
+  private readonly handlePrologueBossTwo = (): void => {
+    this.jumpToBossFromPrologue(2);
+  };
+
+  private readonly handlePrologueBossThree = (): void => {
+    this.jumpToBossFromPrologue(3);
+  };
+
+  private shiftModifier(delta: number): void {
+    if (this.runModifierId === null) {
+      const seed = delta >= 0 ? 0 : RUN_MODIFIER_ROULETTE.length - 1;
+      this.runModifierId = RUN_MODIFIER_ROULETTE[seed].id;
+    } else {
+      const idx = RUN_MODIFIER_ROULETTE.findIndex((m) => m.id === this.runModifierId);
+      this.runModifierId = RUN_MODIFIER_ROULETTE[(idx + delta + RUN_MODIFIER_ROULETTE.length) % RUN_MODIFIER_ROULETTE.length].id;
+    }
+    this.refreshModifierText();
+  }
+
+  constructor() {
+    super('PrologueScene');
+  }
+
+  init(data: PrologueSceneData = {}): void {
+    this.difficultyId = getRaycastDifficultyPreset(data.difficultyId ?? this.registry.get(RAYCAST_DIFFICULTY_REGISTRY_KEY)).id;
+    this.registry.set(RAYCAST_DIFFICULTY_REGISTRY_KEY, this.difficultyId);
+    this.runModifierId = data.runModifierId ?? null;
+  }
+
+  create(): void {
+    stopGameMasterVoice('prologue_enter');
+    prepareGameSession(this.registry);
+    const width = this.scale.width;
+    const height = this.scale.height;
+    this.cameras.main.setBackgroundColor(BG);
+    this.gamepadInput = new RaycastGamepadInput({
+      getSettings: () => ({
+        leftDeadzone: getGamepadLeftDeadzone(this.registry),
+        rightDeadzone: getGamepadRightDeadzone(this.registry),
+        lookSensitivity: getGamepadSensitivity(this.registry),
+        invertLookY: getGamepadInvertY(this.registry),
+        vibrationEnabled: getGamepadVibrationEnabled(this.registry)
+      })
+    });
+    this.touchInput = new RaycastTouchInput(this, {
+      mode: 'ui',
+      getSettings: () => ({
+        enabled: getTouchControlsEnabled(this.registry),
+        buttonScale: getTouchButtonScale(this.registry),
+        lookSensitivity: getTouchLookSensitivity(this.registry),
+        joystickDeadzone: getTouchJoystickDeadzone(this.registry)
+      })
+    });
+
+    const backdrop = this.add.graphics().setDepth(0);
+    backdrop.fillGradientStyle(0x020408, 0x020408, 0x080c14, 0x04060c, 1);
+    backdrop.fillRect(0, 0, width, height);
+    backdrop.lineStyle(1, 0x1e2a38, 0.28);
+    for (let y = 0; y < height; y += 6) {
+      backdrop.lineBetween(0, y, width, y);
+    }
+
+    const copy = getPrologueCopy();
+    const layout = computePrologueScreenLayout(width, height);
+    const textStyle = {
+      fontFamily: 'monospace',
+      fontStyle: '700' as const,
+      align: 'center' as const,
+    };
+
+    this.add
+      .text(layout.centerX, layout.titleY, 'DOOM BIN BASH EDITION', {
+        ...textStyle,
+        fontSize: layout.fontTitle,
+        color: ACCENT_COLOR,
+        wordWrap: { width: layout.contentWidth }
+      })
+      .setOrigin(0.5, 0)
+      .setAlpha(0.88)
+      .setDepth(4);
+
+    this.add
+      .text(layout.missionX, layout.missionY, `// MISIÓN\n${copy.missionBlock.replace(/^MISIÓN:\n/, '')}`, {
+        fontFamily: 'monospace',
+        fontSize: layout.fontBody,
+        fontStyle: '700',
+        color: BODY_COLOR,
+        align: 'center',
+        lineSpacing: 8,
+        wordWrap: { width: layout.columnWidth }
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(4);
+
+    this.add
+      .text(layout.objectiveX, layout.objectiveY, `// OBJETIVO\n${copy.objectiveBlock.replace(/^OBJETIVO:\n/, '')}`, {
+        fontFamily: 'monospace',
+        fontSize: layout.fontBody,
+        fontStyle: '700',
+        color: ACCENT_COLOR,
+        align: 'center',
+        lineSpacing: 12,
+        wordWrap: { width: layout.columnWidth }
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(4);
+
+    this.add
+      .text(layout.controlsX, layout.controlsY, `// CONTROLES\n${copy.controlsBlock}`, {
+        fontFamily: 'monospace',
+        fontSize: layout.fontSmall,
+        fontStyle: '700',
+        color: MUTED_COLOR,
+        align: 'center',
+        lineSpacing: 5,
+        wordWrap: { width: layout.columnWidth }
+      })
+      .setOrigin(0.5, 0)
+      .setAlpha(0.94)
+      .setDepth(4);
+
+    this.modifierText = this.add
+      .text(layout.centerX, layout.modifierY, this.buildModifierPrompt(), {
+        fontFamily: 'monospace',
+        fontSize: layout.fontBody,
+        backgroundColor: '#05120ccc',
+        color: ACCENT_COLOR,
+        align: 'center',
+        lineSpacing: 6,
+        padding: { x: 16, y: 14 },
+        wordWrap: { width: Math.min(layout.contentWidth, 720), useAdvancedWrap: true }
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(5)
+      .setAlpha(0.96);
+
+    this.promptText = this.add
+      .text(layout.centerX, layout.promptY, `${copy.continueLine}\n${copy.backLine}`, {
+        fontFamily: 'monospace',
+        fontSize: layout.fontPrompt,
+        fontStyle: '700',
+        color: ACCENT_COLOR,
+        align: 'center',
+        lineSpacing: 6,
+        wordWrap: { width: layout.contentWidth }
+      })
+      .setOrigin(0.5, 1)
+      .setAlpha(0.82)
+      .setDepth(5);
+
+    this.gamepadStatusText = this.add
+      .text(layout.centerX, layout.gamepadY, '', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#9ef0cf',
+        align: 'center'
+      })
+      .setOrigin(0.5, 1)
+      .setAlpha(0.82)
+      .setDepth(5);
+
+    this.add
+      .text(layout.centerX, layout.footerY, '// FRAGMENTO DE SEÑAL  ·  A Doom Bin Bash Project', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: ACCENT_COLOR,
+        align: 'center'
+      })
+      .setOrigin(0.5, 1)
+      .setAlpha(0.55)
+      .setDepth(4);
+
+    this.cameras.main.fadeIn(520, 0, 0, 0);
+
+    this.registerInputListeners();
+    this.touchInput.create();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanupInputListeners, this);
+    this.events.once(Phaser.Scenes.Events.DESTROY, this.cleanupInputListeners, this);
+  }
+
+  update(): void {
+    this.gamepadInput.update();
+    this.touchInput.update();
+    const touchMessage = this.touchInput.consumeStatusMessage();
+    const gamepadMessage = this.gamepadInput.consumeStatusMessage();
+    const statusLine = touchMessage ?? buildRaycastGamepadFooterLine(this.gamepadInput.getDebugInfo(), gamepadMessage);
+    this.gamepadStatusText.setText(statusLine);
+    this.gamepadStatusText.setAlpha(touchMessage || gamepadMessage || this.gamepadInput.isConnected() ? 0.92 : 0.72);
+
+    if (this.touchInput.consumePressed('confirm') || this.touchInput.consumePressed('pause')) {
+      this.handleContinueRaycast();
+      return;
+    }
+    if (this.touchInput.consumePressed('cancel')) {
+      this.handleBackToMenu();
+      return;
+    }
+    if (this.touchInput.consumePressed('navRight') || this.touchInput.consumePressed('nextWeapon')) {
+      this.shiftModifier(1);
+    }
+    if (this.touchInput.consumePressed('navLeft') || this.touchInput.consumePressed('previousWeapon')) {
+      this.shiftModifier(-1);
+    }
+    if (this.gamepadInput.consumePressed('confirm') || this.gamepadInput.consumePressed('pause')) {
+      this.handleContinueRaycast();
+      return;
+    }
+    if (this.gamepadInput.consumePressed('cancel')) {
+      this.handleBackToMenu();
+      return;
+    }
+    if (this.gamepadInput.consumePressed('navRight') || this.gamepadInput.consumePressed('nextWeapon')) {
+      this.shiftModifier(1);
+    }
+    if (this.gamepadInput.consumePressed('navLeft') || this.gamepadInput.consumePressed('previousWeapon')) {
+      this.shiftModifier(-1);
+    }
+  }
+
+  private registerInputListeners(): void {
+    if (this.inputListenersRegistered) this.cleanupInputListeners();
+    const kb = this.input.keyboard;
+
+    kb?.once('keydown-SPACE', this.handleContinueRaycast);
+    kb?.once('keydown-ENTER', this.handleContinueRaycast);
+    kb?.once('keydown-A', this.handleContinueRaycast);
+    kb?.once('keydown-a', this.handleContinueRaycast);
+    kb?.on('keydown-M', this.handleCycleModifier);
+    kb?.on('keydown-m', this.handleCycleModifier);
+    kb?.on('keydown-R', this.handleRollModifier);
+    kb?.on('keydown-r', this.handleRollModifier);
+    kb?.on('keydown-N', this.handleClearModifier);
+    kb?.on('keydown-n', this.handleClearModifier);
+    kb?.on('keydown-FOUR', this.handlePrologueBossOne);
+    kb?.on('keydown-FIVE', this.handlePrologueBossTwo);
+    kb?.on('keydown-SIX', this.handlePrologueBossThree);
+
+    kb?.once('keydown-ESC', this.handleBackToMenu);
+
+    this.inputListenersRegistered = true;
+  }
+
+  private cleanupInputListeners(): void {
+    if (!this.inputListenersRegistered) return;
+    const kb = this.input.keyboard;
+
+    kb?.off('keydown-SPACE', this.handleContinueRaycast);
+    kb?.off('keydown-ENTER', this.handleContinueRaycast);
+    kb?.off('keydown-A', this.handleContinueRaycast);
+    kb?.off('keydown-a', this.handleContinueRaycast);
+    kb?.off('keydown-M', this.handleCycleModifier);
+    kb?.off('keydown-m', this.handleCycleModifier);
+    kb?.off('keydown-R', this.handleRollModifier);
+    kb?.off('keydown-r', this.handleRollModifier);
+    kb?.off('keydown-N', this.handleClearModifier);
+    kb?.off('keydown-n', this.handleClearModifier);
+    kb?.off('keydown-FOUR', this.handlePrologueBossOne);
+    kb?.off('keydown-FIVE', this.handlePrologueBossTwo);
+    kb?.off('keydown-SIX', this.handlePrologueBossThree);
+    kb?.off('keydown-ESC', this.handleBackToMenu);
+    this.gamepadInput?.destroy();
+    this.touchInput?.destroy();
+
+    this.inputListenersRegistered = false;
+  }
+
+  private readonly handleCycleModifier = (): void => {
+    this.shiftModifier(1);
+  };
+
+  private readonly handleRollModifier = (): void => {
+    this.runModifierId = rollRunModifier().id;
+    this.refreshModifierText();
+  };
+
+  private readonly handleClearModifier = (): void => {
+    this.runModifierId = null;
+    this.refreshModifierText();
+  };
+
+  private refreshModifierText(): void {
+    this.modifierText?.setText(this.buildModifierPrompt());
+  }
+
+  private buildModifierPrompt(): string {
+    return buildPrologueModifierBlock(this.runModifierId, (id) =>
+      id ? getRunModifierById(id as RunModifierId) : null,
+    );
+  }
+}

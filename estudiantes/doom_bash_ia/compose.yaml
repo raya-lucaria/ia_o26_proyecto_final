@@ -1,0 +1,52 @@
+# `docker compose up --build` levanta el juego en http://localhost:8000
+# y el Game Master (narrador + servidor co-op) en el puerto 3001.
+# El narrador con LLM local (Ollama) es opcional: `docker compose --profile llm up --build`.
+services:
+  game:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - game-master
+
+  game-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.game-master
+    environment:
+      GAME_CLIENT_ORIGIN: http://localhost:8000
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "3001:3001"
+    env_file:
+      - path: .env
+        required: false
+
+  # --- Solo con `--profile llm`: narrador con un LLM local, sin llaves de API ---
+  ollama:
+    profiles: ["llm"]
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  ollama-bootstrap:
+    profiles: ["llm"]
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./scripts/ollama-bootstrap.mjs:/app/scripts/ollama-bootstrap.mjs:ro
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:3b
+    command: ["node", "/app/scripts/ollama-bootstrap.mjs"]
+    depends_on:
+      - ollama
+    restart: "no"
+
+volumes:
+  ollama_data:

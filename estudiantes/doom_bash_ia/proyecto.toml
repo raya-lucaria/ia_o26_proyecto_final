@@ -1,0 +1,5 @@
+estado = "propuesta"   # "propuesta" en el primer PR; "entrega" en el segundo
+titulo = "DOOM BIN BASH: un FPS de terminal cuyos enemigos, jefe y director aprenden"
+tema = "Búsqueda (A*), juegos adversariales (MCTS/expectimax), Markov y RL (Q-learning, bandits) aplicados a enemigos, jefe, director de dificultad y un bot jugador en un FPS raycast"
+equipo = ["josemalfavaun", "ricardolimonada03-source"]   # logins de GitHub; si vas solo, uno
+demo = ""              # URL de la demo; vacío en la propuesta
